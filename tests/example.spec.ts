@@ -24,5 +24,9 @@ await page.getByRole('link', { name: 'Quote' }).click();
     }
     //check value using builtin matcher/assertion
     await expect(page.getByLabel('Name')).toHaveValue("club sofa");
+    ///////////////////////////////////////////////////////
+    /////////////screenshoot comparison code///////////////
+    // await expect(page).toHaveScreenshot("NamePageComparison.png");
+    // await expect(page.locator("input[id=TextField172]")).toHaveScreenshot("NameFieldComparison.png");
 
 });
