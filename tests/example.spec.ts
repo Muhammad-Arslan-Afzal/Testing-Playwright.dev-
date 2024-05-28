@@ -26,7 +26,12 @@ await page.getByRole('link', { name: 'Quote' }).click();
     await expect(page.getByLabel('Name')).toHaveValue("club sofa");
     ///////////////////////////////////////////////////////
     /////////////screenshoot comparison code///////////////
+    //https://medium.com/@jalpa.gandhi/how-to-perform-screenshot-comparison-in-playwright-145d542d9bbb
     // await expect(page).toHaveScreenshot("NamePageComparison.png");
     // await expect(page.locator("input[id=TextField172]")).toHaveScreenshot("NameFieldComparison.png");
-
+    /* For the first time take baseline screeshot and then implement change in textfield/ pixels
+    rerun the test and result will be in test-results directory */
+    // page.locator("input[id=TextField172]").fill("club");
+    await expect(page.locator("input[id=TextField172]")).toHaveScreenshot("NameFieldComparison.png");
+    
 });
