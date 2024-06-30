@@ -19,7 +19,7 @@ Series: Fox
 Legs: solid ash wood with brass finishing
 Internal structure: plywood
 Seat interior: zig zag springs, high resilience foam
-Contract: norm passed EN 16139
+Contract: norm passed EN 1613912131
 11,349.131,349.13
 Upholstery: Boucle (Price Group 2)
 Upholstery color: Boucle Beige
