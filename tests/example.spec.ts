@@ -1,9 +1,48 @@
 import { test, expect } from '@playwright/test';
-import fs from 'fs';
+import fs, { existsSync } from 'fs';
+import fsPromises from 'fs/promises'; // Use fs/promises for promise-based file operations
 import https from 'https';
-import pdf from 'pdf-parse';
 import path from 'path';
-import { diffLines } from 'diff';
+import { execSync } from 'child_process'; // Used for executing shell commands
+import { PNG } from 'pngjs';
+import pixelmatch from 'pixelmatch';
+
+// Function to compare two images and generate a diff image
+async function compareImages(expectedScreenshot: string, currentScreenshot: string, diffPath: string, threshold: number = 0.1) {
+  // Read the images
+  const img1 = PNG.sync.read(await fsPromises.readFile(expectedScreenshot));
+  const img2 = PNG.sync.read(await fsPromises.readFile(currentScreenshot));
+  const { width, height } = img1;
+
+  // Ensure the images are of the same dimensions
+  if (width !== img2.width || height !== img2.height) {
+    throw new Error('Images must have the same dimensions');
+  }
+
+  // Compare the images
+  const diff = new PNG({ width, height });
+  const numDiffPixels = pixelmatch(
+    img1.data,
+    img2.data,
+    diff.data,
+    width,
+    height,
+    { threshold }
+  );
+
+  // If there are differences, write the diff image to disk
+  if (numDiffPixels > 0) {
+    await fsPromises.writeFile(diffPath, PNG.sync.write(diff));
+  } else {
+    // Delete the diff image if it exists and has no differences
+    if (existsSync(diffPath)) {
+      await fsPromises.unlink(diffPath);
+    }
+  }
+
+  // Return the number of differing pixels
+  return numDiffPixels;
+}
 
 test('pCon-basket', async ({ page }) => {
   // Go to the page
@@ -30,7 +69,8 @@ test('pCon-basket', async ({ page }) => {
   function extractStringFromUrl(url) {
     const lastSegment = url.substring(url.lastIndexOf('/') + 1);
     const fileNameWithoutExtension = lastSegment.substring(0, lastSegment.lastIndexOf('.'));
-    const desiredString = fileNameWithoutExtension.split('_')[0] + '_' + fileNameWithoutExtension.split('_')[1];
+    // const desiredString = fileNameWithoutExtension.split('_')[0] + '_' + fileNameWithoutExtension.split('_')[1];
+     const desiredString = fileNameWithoutExtension.split('_')[0];
     return desiredString;
   }
 
@@ -40,62 +80,26 @@ test('pCon-basket', async ({ page }) => {
   // Get the URL of the embedded PDF
   const pdfUrl = await embedElement.getAttribute('src');
   const pdfName = extractStringFromUrl(pdfUrl);
-
-  // Paths for PDF and text files
+  // Paths for PDF and screenshot files
   const pdfFilePath = path.join('testPdf', `${pdfName}.pdf`);
-  const expectedTxtPath = path.join('testPdf', `${pdfName}_expected.txt`);
-  const actualTxtPath = path.join('testPdf', `${pdfName}_actual.txt`);
+  const expectedDir = path.join('testPdf',`${pdfName}_expected`);
+  const currentDir = path.join('testPdf', `${pdfName}_current`);
+  const diffDir = path.join('testPdf',`${pdfName}_diff`);
 
-  // Function to extract content from the line that starts with "Quote" onwards
-  function extractContentFromQuoteOnwards(content) {
-    const lines = content.split('\n');
-    const quoteIndex = lines.findIndex(line => line.startsWith('Quote'));
-    if (quoteIndex !== -1) {
-      return lines.slice(quoteIndex).join('\n');
-    }
-    return content; // Return the original content if "Quote" is not found
-  }
+  // Ensure directories exist
+  await fsPromises.mkdir(expectedDir, { recursive: true });
+  await fsPromises.mkdir(currentDir, { recursive: true });
+  await fsPromises.mkdir(diffDir, { recursive: true });
 
-  function fileMatcher() {
-    // Read the expected and actual values from the saved files
-    let expected_export_values = fs.readFileSync(expectedTxtPath, 'utf-8');
-    let actual_export_values = fs.readFileSync(actualTxtPath, 'utf-8');
-    // Extract the content from the line that starts with "Quote" onwards
-    expected_export_values = extractContentFromQuoteOnwards(expected_export_values);
-    actual_export_values = extractContentFromQuoteOnwards(actual_export_values);
-    // Use the `expect` function from Playwright to assert that the values match
-    try {
-      expect(expected_export_values).toMatch(actual_export_values);
-    } catch (error) {
-      console.error('Files do not match! Showing differences:');
-      console.log(`Green: for additions (in expected file) \n Red: for deletions (from expected file) \n Grey: Unchanged content (in expected file)`);
-      showDifferences(expected_export_values, actual_export_values);
-      throw error; // Re-throw the error to fail the test
-    }
-  }
-
-  function showDifferences(expected, actual) {
-    const diffOutput = diffLines(expected, actual);
-    const greyColor = '\x1b[90m'; //ANSI escape sequence for light grey
-    const greenColor = '\x1b[32m';
-    const redColor = '\x1b[31m';
-
-    diffOutput.forEach(part => {
-      const color = part.added ? greenColor : part.removed ? redColor : greyColor;
-      process.stderr.write(color + part.value + greyColor);
-    });
-  }
-
-  // Check if the PDF file already exists
+  // Check if the PDF file already exists, if not, download it
   if (!fs.existsSync(pdfFilePath)) {
-    // Download the PDF if it does not exist
     const file = fs.createWriteStream(pdfFilePath);
     await new Promise((resolve, reject) => {
       https.get(pdfUrl!, function(response) {
         response.pipe(file);
         file.on('finish', function() {
           file.close();
-          console.log('Download Completed');
+          console.log('PDF Download Completed');
           resolve(true);
         });
         file.on('error', reject);
@@ -105,20 +109,49 @@ test('pCon-basket', async ({ page }) => {
     console.log('PDF file already exists.');
   }
 
-  // Use the 'pdf-parse' module to extract the text from the PDF file
-  const dataBuffer = fs.readFileSync(pdfFilePath);
-  const pdfData = await pdf(dataBuffer);
-
-  // Write the extracted text to 'expected.txt' if it does not exist, otherwise to 'actual.txt'
-  if (!fs.existsSync(expectedTxtPath)) {
-    fs.writeFileSync(expectedTxtPath, pdfData.text);
-    console.log('Expected text file created.');
-  } else if (!fs.existsSync(actualTxtPath)) {
-    fs.writeFileSync(actualTxtPath, pdfData.text);
-    console.log('Actual text file created.');
-    fileMatcher();
-  } else {
-    console.log("expected and actual both files exist");
-    fileMatcher();
+  // Function to convert PDF pages to PNG screenshots using pdftoppm
+  function convertPdfToPng(pdfPath: string, pngBasePath: string) {
+    execSync(`pdftoppm -png ${pdfPath} ${pngBasePath}`);
   }
+
+  // Ensure expected and current PNG files exist
+  const expectedFiles = fs.readdirSync(expectedDir).filter(file => file.endsWith('.png'));
+  const currentFiles = fs.readdirSync(currentDir).filter(file => file.endsWith('.png'));
+  
+  // Convert PDFs to PNG screenshots
+  if (expectedFiles.length === 0) {
+    console.log(`Generating expected PNG files for ${pdfName}...`);
+    convertPdfToPng(pdfFilePath, path.join(expectedDir, `${pdfName}_expected`));
+  } else {
+    console.log(`Generating current PNG files for ${pdfName}...`);
+    convertPdfToPng(pdfFilePath, path.join(currentDir, `${pdfName}_current`));
+  }
+
+  if (expectedFiles.length === 0 || currentFiles.length === 0 || expectedFiles.length != currentFiles.length) {
+    console.error('Expected or current PNG files were not generated or both files have different number of pages');
+    process.exit(1);
+  }
+let numDiffPixels; 
+  for (const expectedFile of expectedFiles) {
+    const currentFile = expectedFile.replace('expected', 'current');
+    const expectedScreenshotPath = path.join(expectedDir, expectedFile);
+    const currentScreenshotPath = path.join(currentDir, currentFile);
+    const diffScreenshotPath = path.join(diffDir, `diff_${expectedFile}`);
+
+    
+    try {
+     numDiffPixels = await compareImages(expectedScreenshotPath, currentScreenshotPath, diffScreenshotPath);
+      if (numDiffPixels > 0) {
+        console.log(`Comparing ${expectedFile} with ${currentFile}`);
+        console.log(`Number of differing pixels: ${numDiffPixels}`);
+        console.log(`Diff image created at: ${diffScreenshotPath}`);
+      }
+    } catch (error) {
+      console.error(`Error comparing images: ${error.message}`);
+    }
+  }
+  expect(numDiffPixels).toBe(0);
 });
+
+
+
