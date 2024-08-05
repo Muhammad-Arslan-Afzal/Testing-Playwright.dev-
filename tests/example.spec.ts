@@ -3,13 +3,13 @@ import fs, { existsSync } from 'fs';
 import fsPromises from 'fs/promises'; // Use fs/promises for promise-based file operations
 import https from 'https';
 import path from 'path';
-import { execSync } from 'child_process'; // Used for executing shell commands
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { PDFDocument } from 'pdf-lib';
+import pdf from 'pdf-poppler';
 
 // Function to sanitize filenames
-function sanitizeFilename(filename: string) {
+function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
 }
 
@@ -95,7 +95,7 @@ async function processTemplate(page, template, views, diffExist) {
     await page.getByRole('option', { name: `${template}`, exact: true }).first().click(); // Only select the first matching option
     await page.getByRole('combobox', { name: 'View' }).click();
     await page.getByRole('option', { name: `${views[v]}`, exact: true }).click();
-    await page.waitForTimeout(5000); 
+    await page.waitForTimeout(5000);
     await handlePdfComparison(page, template, views[v], diffExist);
   }
 }
@@ -122,7 +122,7 @@ async function handlePdfComparison(page, template, view, diffExist) {
   if (!fs.existsSync(pdfFilePath)) {
     const file = fs.createWriteStream(pdfFilePath);
     await new Promise((resolve, reject) => {
-      https.get(pdfUrl!, function (response) {
+      https.get(pdfUrl, function (response) {
         response.pipe(file);
         file.on('finish', function () {
           file.close();
@@ -142,10 +142,10 @@ async function handlePdfComparison(page, template, view, diffExist) {
 
   if (expectedFiles.length !== pdfPageCount || expectedFiles.length === 0) {
     // console.log(`Generating expected PNG files for ${pdfName}...`);
-    convertPdfToPng(pdfFilePath, path.join(expectedDir, `${pdfName}_expected`));
+    await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`);
   } else if (currentFiles.length !== pdfPageCount || currentFiles.length === 0) {
     // console.log(`Generating current PNG files for ${pdfName}...`);
-    convertPdfToPng(pdfFilePath, path.join(currentDir, `${pdfName}_current`));
+    await convertPdfToPng(pdfFilePath, currentDir, `${pdfName}_current`);
   } else if (expectedFiles.length !== currentFiles.length) {
     console.error(`For ${fileformat}\n Expected or current PNG files were not generated or expected and current have different number of pages`);
   }
@@ -162,7 +162,7 @@ async function handlePdfComparison(page, template, view, diffExist) {
         diffExist.push(true);
         // console.log(`Comparing ${expectedFile} with ${currentFile}`);
         // console.log(`Number of differing pixels: ${numDiffPixels}`);
-        console.log(`Diff file created for ${fileformat} Directory`)
+        console.log(`Diff file created for ${fileformat} Directory`);
         console.log(`Diff image created at: ${diffScreenshotPath}`);
       }
     } catch (error) {
@@ -178,8 +178,16 @@ function extractStringFromUrl(url) {
   return desiredString;
 }
 
-function convertPdfToPng(pdfPath, pngBasePath) {
-  execSync(`pdftoppm -png "${pdfPath}" "${pngBasePath}"`);
+// await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`)
+async function convertPdfToPng(pdfPath, outputDir, baseName) {
+  const opts = {
+    format: 'png',
+    out_dir: outputDir,
+    out_prefix: baseName,
+    page: null
+  };
+
+  await pdf.convert(pdfPath, opts);
 }
 
 test('pCon-basket', async ({ page }) => {
@@ -232,5 +240,3 @@ test('pCon-basket', async ({ page }) => {
   }
   expect(diffExist.includes(true)).toBe(false);
 });
-
-
