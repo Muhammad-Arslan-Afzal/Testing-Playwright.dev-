@@ -9,7 +9,8 @@
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.43.0",
-    "@types/node": "^20.14.11"
+    "@types/node": "^20.14.11",
+    "pdf-to-png-converter": "^3.2.0"
   },
   "type": "module",
   "dependencies": {

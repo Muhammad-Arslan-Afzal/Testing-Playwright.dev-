@@ -1,46 +1,16 @@
 import { test, expect } from '@playwright/test';
 import fs, { existsSync } from 'fs';
-import fsPromises from 'fs/promises'; // Use fs/promises for promise-based file operations
+import fsPromises from 'fs/promises';
 import https from 'https';
 import path from 'path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { PDFDocument } from 'pdf-lib';
-import pdf from 'pdf-poppler';
+import { pdfToPng } from "pdf-to-png-converter";
 
 // Function to sanitize filenames
 function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-}
-
-// Function to resize an image to a target width and height, filling the extra space with a background color
-function resizeImage(image, targetWidth, targetHeight, backgroundColor = { r: 255, g: 255, b: 255, a: 255 }) {
-  const resizedImage = new PNG({ width: targetWidth, height: targetHeight });
-
-  // Fill the resized image with the background color
-  for (let y = 0; y < targetHeight; y++) {
-    for (let x = 0; x < targetWidth; x++) {
-      const idx = (targetWidth * y + x) << 2;
-      resizedImage.data[idx] = backgroundColor.r;
-      resizedImage.data[idx + 1] = backgroundColor.g;
-      resizedImage.data[idx + 2] = backgroundColor.b;
-      resizedImage.data[idx + 3] = backgroundColor.a;
-    }
-  }
-
-  // Copy the original image data into the resized image
-  for (let y = 0; y < image.height; y++) {
-    for (let x = 0; x < image.width; x++) {
-      const srcIdx = (image.width * y + x) << 2;
-      const destIdx = (targetWidth * y + x) << 2;
-      resizedImage.data[destIdx] = image.data[srcIdx];
-      resizedImage.data[destIdx + 1] = image.data[srcIdx + 1];
-      resizedImage.data[destIdx + 2] = image.data[srcIdx + 2];
-      resizedImage.data[destIdx + 3] = image.data[srcIdx + 3];
-    }
-  }
-
-  return resizedImage;
 }
 
 // Function to compare two images and generate a diff image
@@ -49,22 +19,19 @@ async function compareImages(expectedScreenshot, currentScreenshot, diffPath, th
   const img1 = PNG.sync.read(await fsPromises.readFile(expectedScreenshot));
   const img2 = PNG.sync.read(await fsPromises.readFile(currentScreenshot));
 
-  // Get the dimensions of the larger image
-  const targetWidth = Math.max(img1.width, img2.width);
-  const targetHeight = Math.max(img1.height, img2.height);
-
-  // Resize both images to the target dimensions
-  const resizedImg1 = resizeImage(img1, targetWidth, targetHeight);
-  const resizedImg2 = resizeImage(img2, targetWidth, targetHeight);
+  // Check if the image dimensions are equal
+  if (img1.width !== img2.width || img1.height !== img2.height) {
+    throw new Error(`Image size mismatch: ${expectedScreenshot} (${img1.width}x${img1.height}) vs ${currentScreenshot} (${img2.width}x${img2.height})`);
+  }
 
   // Compare the images
-  const diff = new PNG({ width: targetWidth, height: targetHeight });
+  const diff = new PNG({ width: img1.width, height: img1.height });
   const numDiffPixels = pixelmatch(
-    resizedImg1.data,
-    resizedImg2.data,
+    img1.data,
+    img2.data,
     diff.data,
-    targetWidth,
-    targetHeight,
+    img1.width,
+    img1.height,
     { threshold }
   );
 
@@ -126,14 +93,11 @@ async function handlePdfComparison(page, template, view, diffExist) {
         response.pipe(file);
         file.on('finish', function () {
           file.close();
-          // console.log(`${fileformat}\n PDF Download Completed`);
           resolve(true);
         });
         file.on('error', reject);
       }).on('error', reject);
     });
-  } else {
-    // console.log(`${fileformat}\nPDF file already exists.`);
   }
 
   const pdfPageCount = await getPdfPageCount(pdfFilePath);
@@ -141,13 +105,11 @@ async function handlePdfComparison(page, template, view, diffExist) {
   const currentFiles = fs.readdirSync(currentDir).filter(file => file.endsWith('.png'));
 
   if (expectedFiles.length !== pdfPageCount || expectedFiles.length === 0) {
-    // console.log(`Generating expected PNG files for ${pdfName}...`);
     await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`);
   } else if (currentFiles.length !== pdfPageCount || currentFiles.length === 0) {
-    // console.log(`Generating current PNG files for ${pdfName}...`);
     await convertPdfToPng(pdfFilePath, currentDir, `${pdfName}_current`);
   } else if (expectedFiles.length !== currentFiles.length) {
-    console.error(`For ${fileformat}\n Expected or current PNG files were not generated or expected and current have different number of pages`);
+    throw new Error(`Mismatch in number of pages for ${fileformat}. Expected: ${expectedFiles.length}, Current: ${currentFiles.length}`);
   }
 
   for (const expectedFile of expectedFiles) {
@@ -160,13 +122,11 @@ async function handlePdfComparison(page, template, view, diffExist) {
       const numDiffPixels = await compareImages(expectedScreenshotPath, currentScreenshotPath, diffScreenshotPath);
       if (numDiffPixels > 0) {
         diffExist.push(true);
-        // console.log(`Comparing ${expectedFile} with ${currentFile}`);
-        // console.log(`Number of differing pixels: ${numDiffPixels}`);
-        console.log(`Diff file created for ${fileformat} Directory`);
         console.log(`Diff image created at: ${diffScreenshotPath}`);
       }
     } catch (error) {
       console.error(`Error comparing images: ${error.message}`);
+      throw error; // Immediately fail the test if there's an error during comparison
     }
   }
 }
@@ -178,16 +138,17 @@ function extractStringFromUrl(url) {
   return desiredString;
 }
 
-// await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`)
 async function convertPdfToPng(pdfPath, outputDir, baseName) {
   const opts = {
-    format: 'png',
-    out_dir: outputDir,
-    out_prefix: baseName,
-    page: null
+    disableFontFace: true,
+    useSystemFonts: false,
+    viewportScale: 2.0,
+    outputFolder: outputDir,
+    outputFileMask: baseName,
+    verbosityLevel: 0
   };
 
-  await pdf.convert(pdfPath, opts);
+  await pdfToPng(pdfPath, opts);
 }
 
 test('pCon-basket', async ({ page }) => {
@@ -206,37 +167,20 @@ test('pCon-basket', async ({ page }) => {
   await page.getByRole('tab', { name: 'Report' }).click();
   await page.waitForTimeout(5000);
   const templates = ["pCon.ui Sitag"];
-  // const templates = ["Quote", "Article Overview", "Product Comparison", "pCon.ui Sitag", "UI Product sheet FOP", 
-  //   "Room-Planner: article list scholl", "pCon.facts ui Wini", "pCon.facts Product Sheet",
-  //   "pCon.basket Standard Quote  (expires 10/2023)", "UI Product sheet WeibelWeibel FOP",
-  //   "Facts: Product sheet FOP", "UI Product sheet Leuwico FOP", "pConUi", "Walter Knoll Quote",
-  //   "Facts Product Comparison", "Sedus Quote", "UI Product sheet Hammerbacher FOP",
-  //   "pCon.basket KN Overview", "Wilkhahn", "UI Product sheet Sitag FOP", "Walter Knoll Budget",
-  //   "pCon.facts ui Hammerbacher", "pCon.basket Norengros Offer - FOP", "pCon.ui Profim",
-  //   "pConUi Gärtner Möebel", "pCon.ui KN", "pCon.basket Sedus Standard Quote ", "pCon.basket KN TypeList",
-  //   "pCon.facts Brochure", "Overview", "pCon.basket CE", "pCon.basket KN Standard Quote ", 
-  //   "UI Product Sheet Bakker Elkhuizen FOP", "pCon.basket HW Standard  Quote", 
-  //   "pCon.basket Norengros", "pConUi Filex - FOP", "pCon facts Product Comparer"
-  //   , "pCon.facts Standard Quote", "UI Product sheet Profim FOP", "UI Product sheet Rockfon FOP",
-  //   "pCon.basket KN Delivery", "UI Product sheet Wini FOP", "UI Product sheet Schonbuch FOP",
-  //   "Facts: article list", "Walter K. Budget", "Walter K. Quote", "UI Product Sheet KN FOP",
-  //   "pConUiLeuwico", "pCon.ui WeibelWeibel", "UI product Sheet Gartner Moebel FOP",
-  //   "Facts: article list STDB2B_WBK", "pCon.basket HW Logistics", "pCon.ui Blanco",
-  //   "pConUi Filex",  "Klöber Quote", "pCon.RoomPlanner Leidhäuser ArticleList FOP"
-  // ];
   const views = ["Summarized", "Summarized-Compact"];
-  // const views = ["Summarized", "Summarized-Compact", "Compact", "Detailed", "Flat list"];
   const diffExist: boolean[] = [];
 
   for (let t = 0; t < templates.length; t++) {
     if (templates[t] === "Product Comparison") {
       await page.locator('#ComboBox178-input').click();
-      await page.getByRole('option', { name: `${templates[t]}`, exact: true }).first().click(); // Only select the first matching option
+      await page.getByRole('option', { name: `${templates[t]}`, exact: true }).first().click();
       await page.waitForTimeout(5000);
       await handlePdfComparison(page, templates[t], "", diffExist);
     } else {
       await processTemplate(page, templates[t], views, diffExist);
     }
   }
+
+  // Immediately fail the test if any differences were found
   expect(diffExist.includes(true)).toBe(false);
 });
