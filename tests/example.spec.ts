@@ -13,7 +13,6 @@ function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
 }
 
-// Function to compare two images and generate a diff image
 async function compareImages(expectedScreenshot, currentScreenshot, diffPath, threshold = 0.1) {
   // Read the images
   const img1 = PNG.sync.read(await fsPromises.readFile(expectedScreenshot));
@@ -56,25 +55,25 @@ async function getPdfPageCount(pdfPath) {
   return pdfDoc.getPageCount();
 }
 
-async function processTemplate(page, template, views, diffExist) {
+async function processTemplate(page, template, views, diffExist, browserName) {
   for (let v = 0; v < views.length; v++) {
     await page.locator('#ComboBox178-input').click();
     await page.getByRole('option', { name: `${template}`, exact: true }).first().click(); // Only select the first matching option
     await page.getByRole('combobox', { name: 'View' }).click();
     await page.getByRole('option', { name: `${views[v]}`, exact: true }).click();
     await page.waitForTimeout(5000);
-    await handlePdfComparison(page, template, views[v], diffExist);
+    await handlePdfComparison(page, template, views[v], diffExist, browserName);
   }
 }
 
-async function handlePdfComparison(page, template, view, diffExist) {
+async function handlePdfComparison(page, template, view, diffExist, browserName) {
   const embedElement = await page.locator('embed');
   const pdfUrl = await embedElement.getAttribute('src');
   const pdfName = extractStringFromUrl(pdfUrl);
 
   const sanitizedTemplate = sanitizeFilename(template);
   const sanitizedView = sanitizeFilename(view);
-  const fileformat = `${sanitizedTemplate}_${sanitizedView}`;
+  const fileformat = `${sanitizedTemplate}_${sanitizedView}_${browserName}`;
   const fileDir = path.join('testPdf', `${fileformat}`);
   const pdfFilePath = path.join(fileDir, `${pdfName}.pdf`);
   const expectedDir = path.join(fileDir, `${pdfName}_expected`);
@@ -105,9 +104,9 @@ async function handlePdfComparison(page, template, view, diffExist) {
   const currentFiles = fs.readdirSync(currentDir).filter(file => file.endsWith('.png'));
 
   if (expectedFiles.length !== pdfPageCount || expectedFiles.length === 0) {
-    await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`);
+    await convertPdfToPng(pdfFilePath, expectedDir, `${pdfName}_expected`, browserName);
   } else if (currentFiles.length !== pdfPageCount || currentFiles.length === 0) {
-    await convertPdfToPng(pdfFilePath, currentDir, `${pdfName}_current`);
+    await convertPdfToPng(pdfFilePath, currentDir, `${pdfName}_current`, browserName);
   } else if (expectedFiles.length !== currentFiles.length) {
     throw new Error(`Mismatch in number of pages for ${fileformat}. Expected: ${expectedFiles.length}, Current: ${currentFiles.length}`);
   }
@@ -138,20 +137,20 @@ function extractStringFromUrl(url) {
   return desiredString;
 }
 
-async function convertPdfToPng(pdfPath, outputDir, baseName) {
+async function convertPdfToPng(pdfPath, outputDir, baseName, browserName) {
   const opts = {
     disableFontFace: true,
     useSystemFonts: false,
     viewportScale: 2.0,
     outputFolder: outputDir,
-    outputFileMask: baseName,
+    outputFileMask: `${baseName}_${browserName}`,
     verbosityLevel: 0
   };
 
   await pdfToPng(pdfPath, opts);
 }
 
-test('pCon-basket', async ({ page }) => {
+test('pCon-basket', async ({ page, browserName }) => {
   test.setTimeout(9000000);
   await page.goto('https://cd.easterngraphics.com/apps/pcon/pcon.basket-online/wbk/master/');
 
@@ -175,9 +174,9 @@ test('pCon-basket', async ({ page }) => {
       await page.locator('#ComboBox178-input').click();
       await page.getByRole('option', { name: `${templates[t]}`, exact: true }).first().click();
       await page.waitForTimeout(5000);
-      await handlePdfComparison(page, templates[t], "", diffExist);
+      await handlePdfComparison(page, templates[t], "", diffExist, browserName);
     } else {
-      await processTemplate(page, templates[t], views, diffExist);
+      await processTemplate(page, templates[t], views, diffExist, browserName);
     }
   }
 
